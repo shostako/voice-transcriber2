@@ -1,0 +1,16 @@
+{
+  "name": "Transcribe - 音声文字起こし",
+  "short_name": "Transcribe",
+  "description": "音声ファイルを文字に変換するAIサービス",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#1a1612",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
