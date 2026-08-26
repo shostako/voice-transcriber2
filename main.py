@@ -34,7 +34,7 @@ def base_prompt(model: Optional[str] = None) -> str:
     return PROMPT_OVERRIDE or DEFAULT_PROMPTS.get(model or MODEL, GPT_DEFAULT_PROMPT)
 # whisper-1 の prompt 上限は 224 トークン（日本語で 100〜150 文字程度）。
 # 前チャンク末尾は継続用なので短く留め、用語ヒントを押し出さないようにする
-PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS", "60"))
+PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS") or "60")
 
 # LLM 後処理（同音異義の誤変換修正・句読点・段落分け）。POLISH_MODEL= で無効化はしない、UI 側で選ぶ
 POLISH_MODEL = os.getenv("POLISH_MODEL") or "gpt-5.4-mini"
@@ -54,7 +54,7 @@ TARGET_CHUNK_BYTES = 24 * 1024 * 1024     # 余裕をみた分割目標
 AUDIO_BITRATE = "64k"                     # 16kHz mono mp3。25MB で約 54 分入る
 SILENCE_NOISE_DB = "-35dB"
 SILENCE_MIN_SEC = "0.5"
-FFMPEG_TIMEOUT_SEC = int(os.getenv("FFMPEG_TIMEOUT_SEC", "600"))
+FFMPEG_TIMEOUT_SEC = int(os.getenv("FFMPEG_TIMEOUT_SEC") or "600")
 USER_HINT_MAX_CHARS = 200
 MAX_RESPLIT_DEPTH = 4
 
