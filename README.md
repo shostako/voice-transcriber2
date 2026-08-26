@@ -48,7 +48,20 @@ ffmpeg / ffprobe が PATH に必要（無ければ起動時に警告が出る）
 | `prompt` | string | 用語ヒント（任意、200 文字まで） |
 | `polish` | bool | LLM 校正の有無（既定 true） |
 
-レスポンス: `text`（表示用、校正済みなら校正後）、`raw`（書き起こし原文）、`polished`、`polish_partial`（一部チャンクが校正に失敗して原文のまま）、`polish_model`、`model`、`duration`、`segments`。
+レスポンス（JSON）:
+
+| キー | 型 | 意味 |
+|---|---|---|
+| `text` | string | 表示用本文。校正が成功していれば校正後、そうでなければ `raw` と同じ |
+| `raw` | string | 書き起こし原文 |
+| `polished` | bool | `text` が校正済みか |
+| `model` | string | 書き起こしモデル |
+| `duration` | number | 音声長（秒） |
+| `segments` | int | 分割チャンク数 |
+| `polish_partial` | bool | `polished=true` のときだけ存在。一部チャンクが校正に失敗して原文のまま |
+| `polish_model` | string | `polished=true` のときだけ存在。校正モデル |
+
+`polish=false`、書き起こしが空、全チャンクの校正が失敗した場合は `polished=false` で、`polish_partial` / `polish_model` は付かない。
 
 ## モデル比較
 
