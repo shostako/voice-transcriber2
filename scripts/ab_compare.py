@@ -35,10 +35,10 @@ def run(src: str, models, hint, out_dir: str) -> None:
     print(f"{name}: {duration:.0f}s {size/1e6:.1f}MB")
 
     client = openai.OpenAI()
-    prompt = main.build_prompt(hint, "")
     results = {}
     for model in models:
         main.MODEL = model
+        prompt = main.build_prompt(hint, "")  # モデル別の既定プロンプトを使うので切替後に組む
         t = time.time()
         try:
             text = main.transcribe_file(client, audio, prompt, hint)
@@ -52,9 +52,9 @@ def run(src: str, models, hint, out_dir: str) -> None:
 
     with open(os.path.join(dest, "compare.md"), "w", encoding="utf-8") as f:
         f.write(f"# {name}\n\n{duration:.0f}s / hint: {hint or '(なし)'}\n\n")
-        f.write("| model | 秒 | 文字数 |\n|---|---|---|\n")
+        f.write("| model | 秒 | 文字数 | prompt |\n|---|---|---|---|\n")
         for m, (text, el) in results.items():
-            f.write(f"| {m} | {el:.1f} | {len(text)} |\n")
+            f.write(f"| {m} | {el:.1f} | {len(text)} | {main.base_prompt(m)} |\n")
         for m, (text, _) in results.items():
             f.write(f"\n## {m}\n\n{text}\n")
     print(f"  → {os.path.join(dest, 'compare.md')}")

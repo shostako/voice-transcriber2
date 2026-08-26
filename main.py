@@ -26,7 +26,12 @@ DEFAULT_PROMPTS = {
     "whisper-1": "こんにちは。今日は、会議の内容を記録します。よろしくお願いします。",
 }
 GPT_DEFAULT_PROMPT = "日本語の会話の録音。「あの」「えっと」などのフィラーは省き、句読点を付けて書き起こす。"
-BASE_PROMPT = os.getenv("TRANSCRIBE_PROMPT") or DEFAULT_PROMPTS.get(MODEL, GPT_DEFAULT_PROMPT)
+PROMPT_OVERRIDE = os.getenv("TRANSCRIBE_PROMPT") or None
+
+
+def base_prompt(model: Optional[str] = None) -> str:
+    """環境変数が最優先、無ければモデル別の既定。model 未指定なら現在の MODEL。"""
+    return PROMPT_OVERRIDE or DEFAULT_PROMPTS.get(model or MODEL, GPT_DEFAULT_PROMPT)
 # whisper-1 の prompt 上限は 224 トークン（日本語で 100〜150 文字程度）。
 # 前チャンク末尾は継続用なので短く留め、用語ヒントを押し出さないようにする
 PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS", "60"))
@@ -170,7 +175,7 @@ def cut_segment(src: str, dst: str, start: float, end: float) -> None:
 # --- 文字起こし ---------------------------------------------------------------
 def build_prompt(user_hint: Optional[str], prev_tail: str) -> str:
     """Whisper は prompt が長いと先頭から捨てるので、重要なものほど後ろに置く。"""
-    parts = [BASE_PROMPT]
+    parts = [base_prompt()]
     if user_hint:
         parts.append(user_hint.strip()[:USER_HINT_MAX_CHARS])
     if prev_tail:
