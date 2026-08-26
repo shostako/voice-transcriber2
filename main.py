@@ -17,8 +17,8 @@ app = FastAPI(title="音声文字起こし")
 
 # --- 設定（環境変数で上書き可） ---------------------------------------------
 # 2026-08-26 の A/B（実録音4分）で gpt-transcribe が唯一欠落なし・用語正解率最良だったので既定に
-MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-transcribe")
-LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "ja")
+MODEL = os.getenv("TRANSCRIBE_MODEL") or "gpt-transcribe"   # 空文字も既定に倒す
+LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE") or "ja"        # 同上。言語指定なしにしたければ "auto"
 # prompt の効き方はモデルで違う:
 # - whisper-1: 指示文は効かず「見本文」で文体・句読点が揃う
 # - gpt-transcribe / gpt-4o-*: 文脈説明＋指示文が効く（フィラー除去など）
@@ -192,17 +192,18 @@ def transcribe_file(client: openai.OpenAI, path: str, prompt: str,
     - gpt-transcribe: languages(複数) + keywords + prompt。language 単数は非対応"""
     with open(path, "rb") as audio_file:
         kwargs = dict(model=MODEL, file=audio_file, prompt=prompt)
+        lang = None if LANGUAGE == "auto" else LANGUAGE
         if MODEL == "gpt-transcribe":
             extra = {}
-            if LANGUAGE:
-                extra["languages"] = [LANGUAGE]
+            if lang:
+                extra["languages"] = [lang]
             keywords = split_keywords(user_hint)
             if keywords:
                 extra["keywords"] = keywords
             if extra:
                 kwargs["extra_body"] = extra
-        elif LANGUAGE:
-            kwargs["language"] = LANGUAGE
+        elif lang:
+            kwargs["language"] = lang
         transcript = client.audio.transcriptions.create(**kwargs)
     return transcript.text.strip()
 
