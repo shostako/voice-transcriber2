@@ -232,6 +232,13 @@ def split_for_polish(text: str, limit: int = POLISH_CHUNK_CHARS) -> List[str]:
     pieces = re.split(r"(?<=[。！？\n])", text)
     chunks, buf = [], ""
     for piece in pieces:
+        # 句読点の無い巨大な塊は文字数で機械的に割る
+        while len(piece) > limit:
+            if buf.strip():
+                chunks.append(buf)
+                buf = ""
+            chunks.append(piece[:limit])
+            piece = piece[limit:]
         if buf and len(buf) + len(piece) > limit:
             chunks.append(buf)
             buf = ""
@@ -241,22 +248,30 @@ def split_for_polish(text: str, limit: int = POLISH_CHUNK_CHARS) -> List[str]:
     return chunks
 
 
-def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> str:
+def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str], idx: int) -> Tuple[str, bool]:
+    """1塊を校正して (本文, 整形できたか) を返す。API エラーも長さ比逸脱も原文に落とす。"""
     user = (f"用語集: {user_hint.strip()}\n\n" if user_hint else "") + f"--- 書き起こし ---\n{text}"
-    r = client.chat.completions.create(
-        model=POLISH_MODEL,
-        messages=[{"role": "system", "content": POLISH_SYSTEM}, {"role": "user", "content": user}],
-    )
+    try:
+        r = client.chat.completions.create(
+            model=POLISH_MODEL,
+            messages=[{"role": "system", "content": POLISH_SYSTEM}, {"role": "user", "content": user}],
+        )
+    except Exception as e:
+        print(f"[polish] chunk {idx}: {type(e).__name__}: {e} → 原文を採用", flush=True)
+        return text, False
     out = (r.choices[0].message.content or "").strip()
     ratio = len(out) / max(len(text), 1)
     if not out or not (POLISH_RATIO_MIN <= ratio <= POLISH_RATIO_MAX):
-        print(f"[polish] 長さ比 {ratio:.2f} が範囲外、原文を採用", flush=True)
-        return text
-    return out
+        print(f"[polish] chunk {idx}: 長さ比 {ratio:.2f} が範囲外 → 原文を採用", flush=True)
+        return text, False
+    return out, True
 
 
-def polish_text(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> str:
-    return "\n\n".join(polish_chunk(client, c, user_hint) for c in split_for_polish(text))
+def polish_text(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> Tuple[str, int, int]:
+    """(本文, 整形できた塊数, 全塊数)。塊の連結は単一改行にして、機械的な境界を段落に見せない。"""
+    results = [polish_chunk(client, c, user_hint, i) for i, c in enumerate(split_for_polish(text))]
+    ok = sum(1 for _, done in results if done)
+    return "\n".join(t for t, _ in results), ok, len(results)
 
 
 @app.post("/transcribe")
@@ -311,12 +326,14 @@ def transcribe_audio(
             "segments": len(chunks),
         }
         if polish and raw.strip():
-            try:
-                result["text"] = polish_text(client, raw, prompt)
+            text, ok, total = polish_text(client, raw, prompt)
+            if ok > 0:
+                result["text"] = text
                 result["polished"] = True
+                result["polish_partial"] = ok < total
                 result["polish_model"] = POLISH_MODEL
-            except Exception as e:  # 後処理の失敗で本体を道連れにしない
-                print(f"[polish] 失敗、原文を返す: {e}", flush=True)
+            else:
+                print(f"[polish] 全 {total} 塊が原文に戻った", flush=True)
         return result
 
     except ValueError as e:

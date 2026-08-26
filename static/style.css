@@ -287,9 +287,13 @@ body {
   min-height: 1.2em;
 }
 
-/* Hint Box */
+/* Options (hint + polish) */
+.options-section {
+  margin: calc(-1 * var(--space-lg)) 0 var(--space-xl);
+  animation: slideUp 0.6s ease-out 0.3s both;
+}
+
 .hint-box {
-  margin-top: var(--space-md);
   text-align: left;
 }
 
