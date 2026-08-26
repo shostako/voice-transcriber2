@@ -24,7 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderResult() {
     if (!lastResult) return;
     transcriptionText.textContent = showingRaw ? lastResult.raw : lastResult.text;
-    rawBtn.querySelector('span').textContent = showingRaw ? 'Polished' : 'Raw';
+    const mark = lastResult.polish_partial ? '*' : '';   // 一部未整形の印
+    rawBtn.querySelector('span').textContent = (showingRaw ? 'Polished' : 'Raw') + mark;
     rawBtn.title = lastResult.polish_partial ? '一部の塊は整形できず原文のまま。整形前の原文と切り替え' : '整形前の原文と切り替え';
     rawBtn.classList.toggle('hidden', !lastResult.polished);
   }
