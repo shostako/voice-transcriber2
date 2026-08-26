@@ -7,6 +7,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const transcriptionText = document.getElementById('transcription-text');
   const copyBtn = document.getElementById('copy-btn');
   const downloadBtn = document.getElementById('download-btn');
+  const hintInput = document.getElementById('hint-input');
+
+  // 用語ヒントは端末に覚えさせる
+  try {
+    const saved = localStorage.getItem('transcribe-hint');
+    if (saved) hintInput.value = saved;
+  } catch (_) {}
+  hintInput.addEventListener('input', () => {
+    try { localStorage.setItem('transcribe-hint', hintInput.value); } catch (_) {}
+  });
 
   // Drag & Drop
   dropZone.addEventListener('dragover', (e) => {
@@ -74,8 +84,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function handleFile(file) {
     // Validate file type
-    if (!file.type.startsWith('audio/')) {
-      alert('音声ファイルを選択してください。');
+    if (!(file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+      alert('音声または動画ファイルを選択してください。');
       return;
     }
 
@@ -85,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const formData = new FormData();
     formData.append('file', file);
+    const hint = hintInput.value.trim();
+    if (hint) formData.append('prompt', hint);
 
     try {
       const response = await fetch('/transcribe', {

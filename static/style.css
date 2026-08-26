@@ -287,6 +287,45 @@ body {
   min-height: 1.2em;
 }
 
+/* Hint Box */
+.hint-box {
+  margin-top: var(--space-md);
+  text-align: left;
+}
+
+.hint-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faded);
+  margin-bottom: var(--space-xs);
+}
+
+.hint-input {
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--ink-faded);
+  background: var(--highlight);
+  color: var(--ink);
+  resize: vertical;
+}
+
+.hint-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.hint-note {
+  margin-top: var(--space-xs);
+  font-size: 0.75rem;
+  color: var(--ink-faded);
+}
+
 /* Result Section */
 .result-section {
   animation: slideUp 0.6s ease-out;
