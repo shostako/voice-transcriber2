@@ -1,0 +1,23 @@
+# Render の GitHub App 連携（自動デプロイ）が死んでいるため、Deploy Hook を叩いて代替する。
+# Secrets に RENDER_DEPLOY_HOOK（Render → Settings → Deploy Hook の URL）を登録すること。
+name: Render deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK secret is not set"; exit 1
+          fi
+          code=$(curl -s -o /tmp/resp -w '%{http_code}' -X POST "$HOOK")
+          cat /tmp/resp; echo
+          [ "$code" = "200" ] || { echo "::error::deploy hook returned $code"; exit 1; }
