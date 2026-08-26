@@ -56,6 +56,10 @@
         <textarea id="hint-input" class="hint-input" rows="2" maxlength="200"
           placeholder="固有名詞・専門用語を読点区切りで。例: 射出成形、金型、ゲート、ランナ、成形課"></textarea>
         <p class="hint-note">人名・製品名・業界用語を並べると誤変換が減る。重要な語ほど後ろに。100文字程度まで（上限200）。</p>
+        <label class="polish-toggle">
+          <input type="checkbox" id="polish-input" checked>
+          <span>AI整形（誤変換の修正・句読点・段落分け）</span>
+        </label>
       </div>
     </section>
 
@@ -66,6 +70,9 @@
           文字起こし結果
         </h2>
         <div class="result-actions">
+          <button class="action-btn hidden" id="raw-btn" title="整形前の原文と切り替え">
+            <span>Raw</span>
+          </button>
           <button class="action-btn" id="copy-btn" title="コピー">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2"/>

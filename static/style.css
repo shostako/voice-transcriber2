@@ -326,6 +326,23 @@ body {
   color: var(--ink-faded);
 }
 
+.polish-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--ink-light);
+  cursor: pointer;
+}
+
+.polish-toggle input {
+  accent-color: var(--accent);
+  width: 1rem;
+  height: 1rem;
+}
+
 /* Result Section */
 .result-section {
   animation: slideUp 0.6s ease-out;
