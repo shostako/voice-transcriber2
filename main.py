@@ -1,12 +1,13 @@
 import os
-import math
+import re
 import shutil
 import subprocess
-from typing import Optional
+import tempfile
+from typing import List, Optional, Tuple
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import openai
 
@@ -14,101 +15,176 @@ load_dotenv()
 
 app = FastAPI(title="音声文字起こし")
 
+# --- 設定（環境変数で上書き可） ---------------------------------------------
+MODEL = os.getenv("TRANSCRIBE_MODEL", "whisper-1")
+LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "ja")
+# Whisper は指示文ではなく「見本文」を prompt に渡すと文体・句読点が揃う
+BASE_PROMPT = os.getenv(
+    "TRANSCRIBE_PROMPT",
+    "こんにちは。今日は、会議の内容を記録します。よろしくお願いします。",
+)
+# whisper-1 の prompt 上限は 224 トークン（日本語で 100〜150 文字程度）。
+# 前チャンク末尾は継続用なので短く留め、用語ヒントを押し出さないようにする
+PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS", "60"))
+
+API_MAX_BYTES = 25 * 1024 * 1024          # OpenAI 側の上限
+TARGET_CHUNK_BYTES = 24 * 1024 * 1024     # 余裕をみた分割目標
+AUDIO_BITRATE = "64k"                     # 16kHz mono mp3。25MB で約 54 分入る
+SILENCE_NOISE_DB = "-35dB"
+SILENCE_MIN_SEC = "0.5"
+
+
+# --- ffmpeg ラッパ ------------------------------------------------------------
+def _run(cmd: List[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def normalize_audio(src: str, dst: str) -> None:
+    """入力を 16kHz mono mp3 に落とす。Whisper は内部で 16kHz mono に潰すので情報損失はない。
+    動画コンテナからは音声トラックだけ抜く (-vn)。"""
+    r = _run([
+        "ffmpeg", "-y", "-v", "error",
+        "-i", src,
+        "-vn", "-ac", "1", "-ar", "16000",
+        "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE,
+        dst,
+    ])
+    if r.returncode != 0 or not os.path.exists(dst):
+        raise ValueError(f"音声として読み込めませんでした: {r.stderr.strip()[-300:]}")
+
+
+def probe_duration(path: str) -> float:
+    r = _run([
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+    ])
+    return float(r.stdout.strip())
+
+
+def detect_silence_midpoints(path: str) -> List[float]:
+    """silencedetect で無音区間を拾い、その中点（秒）を返す。"""
+    r = _run([
+        "ffmpeg", "-v", "info", "-nostats",
+        "-i", path,
+        "-af", f"silencedetect=noise={SILENCE_NOISE_DB}:d={SILENCE_MIN_SEC}",
+        "-f", "null", "-",
+    ])
+    starts = [float(m) for m in re.findall(r"silence_start:\s*([\d.]+)", r.stderr)]
+    ends = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", r.stderr)]
+    return [(s + e) / 2 for s, e in zip(starts, ends)]
+
+
+def plan_segments(path: str, duration: float) -> List[Tuple[float, float]]:
+    """25MB 超なら無音位置で切る区間を貪欲に決める。各区間は必ず上限以下。"""
+    size = os.path.getsize(path)
+    if size <= TARGET_CHUNK_BYTES:
+        return [(0.0, duration)]
+
+    bytes_per_sec = size / duration
+    max_seg = TARGET_CHUNK_BYTES / bytes_per_sec
+    silences = detect_silence_midpoints(path)
+
+    segments: List[Tuple[float, float]] = []
+    cursor = 0.0
+    while duration - cursor > max_seg:
+        lo = cursor + max_seg * 0.5
+        hi = cursor + max_seg * 0.98
+        ideal = cursor + max_seg * 0.9
+        candidates = [t for t in silences if lo <= t <= hi]
+        cut = min(candidates, key=lambda t: abs(t - ideal)) if candidates else cursor + max_seg * 0.95
+        segments.append((cursor, cut))
+        cursor = cut
+    segments.append((cursor, duration))
+    return segments
+
+
+def cut_segment(src: str, dst: str, start: float, end: float) -> None:
+    r = _run([
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{start:.3f}", "-i", src,
+        "-t", f"{end - start:.3f}",
+        "-c", "copy",
+        dst,
+    ])
+    if r.returncode != 0:
+        raise RuntimeError(f"分割に失敗しました: {r.stderr.strip()[-300:]}")
+
+
+# --- 文字起こし ---------------------------------------------------------------
+def build_prompt(user_hint: Optional[str], prev_tail: str) -> str:
+    """Whisper は prompt が長いと先頭から捨てるので、重要なものほど後ろに置く。"""
+    parts = [BASE_PROMPT]
+    if user_hint:
+        parts.append(user_hint.strip())
+    if prev_tail:
+        parts.append(prev_tail)
+    return " ".join(p for p in parts if p)
+
+
+def transcribe_file(client: openai.OpenAI, path: str, prompt: str) -> str:
+    with open(path, "rb") as audio_file:
+        kwargs = dict(model=MODEL, file=audio_file, prompt=prompt)
+        if LANGUAGE:
+            kwargs["language"] = LANGUAGE
+        transcript = client.audio.transcriptions.create(**kwargs)
+    return transcript.text.strip()
+
 
 @app.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
-    """音声ファイルを文字起こしする"""
-    if not file:
-        raise HTTPException(status_code=400, detail="ファイルがアップロードされていません")
-
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    prompt: Optional[str] = Form(None),
+):
+    """音声/動画ファイルを文字起こしする。prompt は用語ヒント（任意）。"""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return JSONResponse(
             status_code=500,
-            content={"error": "OpenAI APIキーが設定されていません。.envファイルを確認してください。"}
+            content={"error": "OpenAI APIキーが設定されていません。.envファイルを確認してください。"},
         )
 
-    temp_filename = f"temp_{file.filename}"
+    workdir = tempfile.mkdtemp(prefix="transcribe_")
     try:
-        # 一時ファイルに保存
-        with open(temp_filename, "wb") as buffer:
+        ext = os.path.splitext(file.filename or "")[1][:8]
+        src = os.path.join(workdir, f"input{ext}")
+        with open(src, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        audio = os.path.join(workdir, "audio.mp3")
+        normalize_audio(src, audio)
+        duration = probe_duration(audio)
+        segments = plan_segments(audio, duration)
+
         client = openai.OpenAI(api_key=api_key)
-        file_size = os.path.getsize(temp_filename)
-        MAX_SIZE = 25 * 1024 * 1024  # 25MB
+        texts: List[str] = []
+        prev_tail = ""
+        for i, (start, end) in enumerate(segments):
+            if len(segments) == 1:
+                target = audio
+            else:
+                target = os.path.join(workdir, f"chunk_{i}.mp3")
+                cut_segment(audio, target, start, end)
+            text = transcribe_file(client, target, build_prompt(prompt, prev_tail))
+            texts.append(text)
+            prev_tail = text[-PREV_TAIL_CHARS:] if PREV_TAIL_CHARS > 0 else ""
 
-        if file_size <= MAX_SIZE:
-            # 通常処理
-            with open(temp_filename, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file
-                )
-            final_text = transcript.text
-        else:
-            # 大容量ファイルの分割処理
-            final_text = await _process_large_file(temp_filename, client)
+        return {
+            "text": "\n".join(t for t in texts if t),
+            "model": MODEL,
+            "duration": round(duration, 1),
+            "segments": len(segments),
+        }
 
-        return {"text": final_text}
-
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
-
     finally:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-
-
-async def _process_large_file(temp_filename: str, client: openai.OpenAI) -> str:
-    """25MB超のファイルをffmpegで分割して処理"""
-    # 音声の長さを取得
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        temp_filename
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    duration = float(result.stdout.strip())
-
-    file_ext = os.path.splitext(temp_filename)[1]
-    chunk_length = 10 * 60  # 10分
-    num_chunks = math.ceil(duration / chunk_length)
-
-    full_transcript = []
-
-    for i in range(num_chunks):
-        chunk_filename = f"temp_chunk_{i}{file_ext}"
-        start_time = i * chunk_length
-
-        # ffmpegで分割
-        split_cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", temp_filename,
-            "-ss", str(start_time),
-            "-t", str(chunk_length),
-            "-acodec", "copy",
-            chunk_filename
-        ]
-        subprocess.run(split_cmd, check=True, capture_output=True)
-
-        try:
-            with open(chunk_filename, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file
-                )
-            full_transcript.append(transcript.text)
-        finally:
-            if os.path.exists(chunk_filename):
-                os.remove(chunk_filename)
-
-    return " ".join(full_transcript)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 # 静的ファイル配信（APIルートの後に配置）

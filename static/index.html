@@ -48,8 +48,14 @@
         <h2 class="upload-title">音声ファイルをドロップ</h2>
         <p class="upload-hint">または</p>
         <label for="file-input" class="upload-btn">ファイルを選択</label>
-        <input type="file" id="file-input" accept="audio/*" hidden>
+        <input type="file" id="file-input" accept="audio/*,video/*" hidden>
         <p class="file-name" id="file-name"></p>
+      </div>
+      <div class="hint-box">
+        <label for="hint-input" class="hint-label">用語ヒント（任意）</label>
+        <textarea id="hint-input" class="hint-input" rows="2"
+          placeholder="固有名詞・専門用語を読点区切りで。例: 射出成形、金型、ゲート、ランナ、成形課"></textarea>
+        <p class="hint-note">人名・製品名・業界用語を並べると誤変換が減る。100文字程度まで。</p>
       </div>
     </section>
 
