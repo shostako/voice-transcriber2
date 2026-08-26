@@ -36,6 +36,19 @@ def base_prompt(model: Optional[str] = None) -> str:
 # 前チャンク末尾は継続用なので短く留め、用語ヒントを押し出さないようにする
 PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS", "60"))
 
+# LLM 後処理（同音異義の誤変換修正・句読点・段落分け）。POLISH_MODEL= で無効化はしない、UI 側で選ぶ
+POLISH_MODEL = os.getenv("POLISH_MODEL") or "gpt-5.4-mini"
+POLISH_CHUNK_CHARS = 3000        # 1回の校正に渡す本文の目安（文末で切る）
+POLISH_RATIO_MIN, POLISH_RATIO_MAX = 0.7, 1.5   # この範囲を外れたら要約/水増しとみなし原文に戻す
+POLISH_SYSTEM = """あなたは日本語の会議録音の書き起こしを校正する編集者です。以下を厳守してください。
+- 内容の要約・省略・言い換えはしない。発言の順序と情報量を保つ
+- 直すのは次だけ: 同音異義語の誤変換（文脈と用語集で判断）、句読点、明らかな聞き間違い
+- 用語集にある語（人名・製品名・専門用語）と音が近い語は、用語集の表記に置き換える
+- 話題の切れ目で空行を入れて段落に分ける
+- 「あの」「えっと」「まあ」等のフィラーと、同じ語の言い直しは取り除いてよい
+- 話者名や敬称は追加しない
+- 出力は校正後の本文のみ。前置きや説明は書かない"""
+
 API_MAX_BYTES = 25 * 1024 * 1024          # OpenAI 側の上限
 TARGET_CHUNK_BYTES = 24 * 1024 * 1024     # 余裕をみた分割目標
 AUDIO_BITRATE = "64k"                     # 16kHz mono mp3。25MB で約 54 分入る
@@ -213,10 +226,59 @@ def transcribe_file(client: openai.OpenAI, path: str, prompt: str,
     return transcript.text.strip()
 
 
+# --- LLM 後処理 ---------------------------------------------------------------
+def split_for_polish(text: str, limit: int = POLISH_CHUNK_CHARS) -> List[str]:
+    """文末（。！？/改行）で切りながら limit 文字前後の塊にする。"""
+    pieces = re.split(r"(?<=[。！？\n])", text)
+    chunks, buf = [], ""
+    for piece in pieces:
+        # 句読点の無い巨大な塊は文字数で機械的に割る
+        while len(piece) > limit:
+            if buf.strip():
+                chunks.append(buf)
+                buf = ""
+            chunks.append(piece[:limit])
+            piece = piece[limit:]
+        if buf and len(buf) + len(piece) > limit:
+            chunks.append(buf)
+            buf = ""
+        buf += piece
+    if buf.strip():
+        chunks.append(buf)
+    return chunks
+
+
+def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str], idx: int) -> Tuple[str, bool]:
+    """1塊を校正して (本文, 整形できたか) を返す。API エラーも長さ比逸脱も原文に落とす。"""
+    user = (f"用語集: {user_hint.strip()}\n\n" if user_hint else "") + f"--- 書き起こし ---\n{text}"
+    try:
+        r = client.chat.completions.create(
+            model=POLISH_MODEL,
+            messages=[{"role": "system", "content": POLISH_SYSTEM}, {"role": "user", "content": user}],
+        )
+    except Exception as e:
+        print(f"[polish] chunk {idx}: {type(e).__name__}: {e} → 原文を採用", flush=True)
+        return text, False
+    out = (r.choices[0].message.content or "").strip()
+    ratio = len(out) / max(len(text), 1)
+    if not out or not (POLISH_RATIO_MIN <= ratio <= POLISH_RATIO_MAX):
+        print(f"[polish] chunk {idx}: 長さ比 {ratio:.2f} が範囲外 → 原文を採用", flush=True)
+        return text, False
+    return out, True
+
+
+def polish_text(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> Tuple[str, int, int]:
+    """(本文, 整形できた塊数, 全塊数)。塊の連結は単一改行にして、機械的な境界を段落に見せない。"""
+    results = [polish_chunk(client, c, user_hint, i) for i, c in enumerate(split_for_polish(text))]
+    ok = sum(1 for _, done in results if done)
+    return "\n".join(t for t, _ in results), ok, len(results)
+
+
 @app.post("/transcribe")
 def transcribe_audio(
     file: UploadFile = File(...),
     prompt: Optional[str] = Form(None),
+    polish: bool = Form(True),
 ):
     """音声/動画ファイルを文字起こしする。prompt は用語ヒント（任意）。
     ffmpeg と OpenAI 呼び出しはブロッキングなので同期関数にしてスレッドプールに逃がす。"""
@@ -254,12 +316,25 @@ def transcribe_audio(
             texts.append(text)
             prev_tail = text[-PREV_TAIL_CHARS:] if PREV_TAIL_CHARS > 0 else ""
 
-        return {
-            "text": "\n".join(t for t in texts if t),
+        raw = "\n".join(t for t in texts if t)
+        result = {
+            "text": raw,
+            "raw": raw,
+            "polished": False,
             "model": MODEL,
             "duration": round(duration, 1),
             "segments": len(chunks),
         }
+        if polish and raw.strip():
+            text, ok, total = polish_text(client, raw, prompt)
+            if ok > 0:
+                result["text"] = text
+                result["polished"] = True
+                result["polish_partial"] = ok < total
+                result["polish_model"] = POLISH_MODEL
+            else:
+                print(f"[polish] 全 {total} 塊が原文に戻った", flush=True)
+        return result
 
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})

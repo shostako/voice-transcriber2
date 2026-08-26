@@ -287,9 +287,13 @@ body {
   min-height: 1.2em;
 }
 
-/* Hint Box */
+/* Options (hint + polish) */
+.options-section {
+  margin: calc(-1 * var(--space-lg)) 0 var(--space-xl);
+  animation: slideUp 0.6s ease-out 0.3s both;
+}
+
 .hint-box {
-  margin-top: var(--space-md);
   text-align: left;
 }
 
@@ -324,6 +328,23 @@ body {
   margin-top: var(--space-xs);
   font-size: 0.75rem;
   color: var(--ink-faded);
+}
+
+.polish-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--ink-light);
+  cursor: pointer;
+}
+
+.polish-toggle input {
+  accent-color: var(--accent);
+  width: 1rem;
+  height: 1rem;
 }
 
 /* Result Section */

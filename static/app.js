@@ -8,6 +8,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const copyBtn = document.getElementById('copy-btn');
   const downloadBtn = document.getElementById('download-btn');
   const hintInput = document.getElementById('hint-input');
+  const polishInput = document.getElementById('polish-input');
+  const rawBtn = document.getElementById('raw-btn');
+  let lastResult = null;   // {text, raw, polished}
+  let showingRaw = false;
+
+  try {
+    const savedPolish = localStorage.getItem('transcribe-polish');
+    if (savedPolish !== null) polishInput.checked = savedPolish === '1';
+  } catch (_) {}
+  polishInput.addEventListener('change', () => {
+    try { localStorage.setItem('transcribe-polish', polishInput.checked ? '1' : '0'); } catch (_) {}
+  });
+
+  function renderResult() {
+    if (!lastResult) return;
+    transcriptionText.textContent = showingRaw ? lastResult.raw : lastResult.text;
+    const mark = lastResult.polish_partial ? '*' : '';   // 一部未整形の印
+    rawBtn.querySelector('span').textContent = (showingRaw ? 'Polished' : 'Raw') + mark;
+    rawBtn.title = lastResult.polish_partial ? '一部の塊は整形できず原文のまま。整形前の原文と切り替え' : '整形前の原文と切り替え';
+    rawBtn.classList.toggle('hidden', !lastResult.polished);
+  }
+
+  rawBtn.addEventListener('click', () => {
+    showingRaw = !showingRaw;
+    renderResult();
+  });
 
   // 用語ヒントは端末に覚えさせる
   try {
@@ -97,6 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
     formData.append('file', file);
     const hint = hintInput.value.trim();
     if (hint) formData.append('prompt', hint);
+    formData.append('polish', polishInput.checked ? 'true' : 'false');
 
     try {
       const response = await fetch('/transcribe', {
@@ -107,7 +134,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await response.json();
 
       if (response.ok) {
-        transcriptionText.textContent = data.text;
+        lastResult = data;
+        showingRaw = false;
+        renderResult();
         resultSection.classList.remove('hidden');
         // Scroll to result
         resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
