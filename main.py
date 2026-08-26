@@ -16,13 +16,17 @@ load_dotenv()
 app = FastAPI(title="音声文字起こし")
 
 # --- 設定（環境変数で上書き可） ---------------------------------------------
-MODEL = os.getenv("TRANSCRIBE_MODEL", "whisper-1")
+# 2026-08-26 の A/B（実録音4分）で gpt-transcribe が唯一欠落なし・用語正解率最良だったので既定に
+MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-transcribe")
 LANGUAGE = os.getenv("TRANSCRIBE_LANGUAGE", "ja")
-# Whisper は指示文ではなく「見本文」を prompt に渡すと文体・句読点が揃う
-BASE_PROMPT = os.getenv(
-    "TRANSCRIBE_PROMPT",
-    "こんにちは。今日は、会議の内容を記録します。よろしくお願いします。",
-)
+# prompt の効き方はモデルで違う:
+# - whisper-1: 指示文は効かず「見本文」で文体・句読点が揃う
+# - gpt-transcribe / gpt-4o-*: 文脈説明＋指示文が効く（フィラー除去など）
+DEFAULT_PROMPTS = {
+    "whisper-1": "こんにちは。今日は、会議の内容を記録します。よろしくお願いします。",
+}
+GPT_DEFAULT_PROMPT = "日本語の会話の録音。「あの」「えっと」などのフィラーは省き、句読点を付けて書き起こす。"
+BASE_PROMPT = os.getenv("TRANSCRIBE_PROMPT") or DEFAULT_PROMPTS.get(MODEL, GPT_DEFAULT_PROMPT)
 # whisper-1 の prompt 上限は 224 トークン（日本語で 100〜150 文字程度）。
 # 前チャンク末尾は継続用なので短く留め、用語ヒントを押し出さないようにする
 PREV_TAIL_CHARS = int(os.getenv("TRANSCRIBE_PREV_TAIL_CHARS", "60"))
@@ -174,10 +178,30 @@ def build_prompt(user_hint: Optional[str], prev_tail: str) -> str:
     return " ".join(p for p in parts if p)
 
 
-def transcribe_file(client: openai.OpenAI, path: str, prompt: str) -> str:
+def split_keywords(user_hint: Optional[str]) -> List[str]:
+    """用語ヒントを読点・カンマ・空白で割って keywords リストにする。"""
+    if not user_hint:
+        return []
+    return [k for k in re.split(r"[、,，\s]+", user_hint.strip()) if k][:50]
+
+
+def transcribe_file(client: openai.OpenAI, path: str, prompt: str,
+                    user_hint: Optional[str] = None) -> str:
+    """モデル差分はここに閉じ込める。
+    - whisper-1 / gpt-4o-*: language(単数) + prompt
+    - gpt-transcribe: languages(複数) + keywords + prompt。language 単数は非対応"""
     with open(path, "rb") as audio_file:
         kwargs = dict(model=MODEL, file=audio_file, prompt=prompt)
-        if LANGUAGE:
+        if MODEL == "gpt-transcribe":
+            extra = {}
+            if LANGUAGE:
+                extra["languages"] = [LANGUAGE]
+            keywords = split_keywords(user_hint)
+            if keywords:
+                extra["keywords"] = keywords
+            if extra:
+                kwargs["extra_body"] = extra
+        elif LANGUAGE:
             kwargs["language"] = LANGUAGE
         transcript = client.audio.transcriptions.create(**kwargs)
     return transcript.text.strip()
@@ -220,7 +244,7 @@ def transcribe_audio(
         texts: List[str] = []
         prev_tail = ""
         for target in chunks:
-            text = transcribe_file(client, target, build_prompt(prompt, prev_tail))
+            text = transcribe_file(client, target, build_prompt(prompt, prev_tail), prompt)
             texts.append(text)
             prev_tail = text[-PREV_TAIL_CHARS:] if PREV_TAIL_CHARS > 0 else ""
 
