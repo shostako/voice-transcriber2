@@ -2,7 +2,7 @@
 
 会議録音を日本語で文字起こしする単機能 Web アプリ。OpenAI の音声モデルで書き起こし、LLM で誤変換・句読点・段落を整えて返す。
 
-本番: https://voice-transcriber2.onrender.com（Render free / Docker）
+本番: <https://voice-transcriber2.onrender.com>（Render free / Docker）
 
 ## 何をするか
 
