@@ -32,11 +32,28 @@ TARGET_CHUNK_BYTES = 24 * 1024 * 1024     # 余裕をみた分割目標
 AUDIO_BITRATE = "64k"                     # 16kHz mono mp3。25MB で約 54 分入る
 SILENCE_NOISE_DB = "-35dB"
 SILENCE_MIN_SEC = "0.5"
+FFMPEG_TIMEOUT_SEC = int(os.getenv("FFMPEG_TIMEOUT_SEC", "600"))
+USER_HINT_MAX_CHARS = 200
+MAX_RESPLIT_DEPTH = 4
+
+for _tool in ("ffmpeg", "ffprobe"):
+    if shutil.which(_tool) is None:
+        print(f"[warn] {_tool} が見つかりません。文字起こしは失敗します", flush=True)
 
 
 # --- ffmpeg ラッパ ------------------------------------------------------------
 def _run(cmd: List[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_SEC)
+    except FileNotFoundError:
+        raise RuntimeError(f"{cmd[0]} が見つかりません。サーバ環境に ffmpeg を入れてください")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{cmd[0]} が {FFMPEG_TIMEOUT_SEC} 秒以内に終わりませんでした")
+
+
+def _check(r: subprocess.CompletedProcess, what: str) -> None:
+    if r.returncode != 0:
+        raise RuntimeError(f"{what}に失敗しました: {r.stderr.strip()[-300:]}")
 
 
 def normalize_audio(src: str, dst: str) -> None:
@@ -60,27 +77,37 @@ def probe_duration(path: str) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1",
         path,
     ])
-    return float(r.stdout.strip())
+    _check(r, "長さの取得")
+    try:
+        duration = float(r.stdout.strip())
+    except ValueError:
+        raise RuntimeError(f"長さを読めませんでした: {r.stdout!r}")
+    if duration <= 0:
+        raise ValueError("音声の長さが 0 です。ファイルが壊れているか無音です")
+    return duration
 
 
 def detect_silence_midpoints(path: str) -> List[float]:
     """silencedetect で無音区間を拾い、その中点（秒）を返す。"""
     r = _run([
-        "ffmpeg", "-v", "info", "-nostats",
+        "ffmpeg", "-hide_banner", "-v", "info", "-nostats",
         "-i", path,
         "-af", f"silencedetect=noise={SILENCE_NOISE_DB}:d={SILENCE_MIN_SEC}",
         "-f", "null", "-",
     ])
+    _check(r, "無音検出")
     starts = [float(m) for m in re.findall(r"silence_start:\s*([\d.]+)", r.stderr)]
     ends = [float(m) for m in re.findall(r"silence_end:\s*([\d.]+)", r.stderr)]
     return [(s + e) / 2 for s, e in zip(starts, ends)]
 
 
-def plan_segments(path: str, duration: float) -> List[Tuple[float, float]]:
-    """25MB 超なら無音位置で切る区間を貪欲に決める。各区間は必ず上限以下。"""
+def plan_segments(path: str, duration: float) -> Tuple[List[Tuple[float, float]], List[float]]:
+    """25MB 超なら無音位置で切る区間を貪欲に決める。
+    区間の秒数は平均ビットレートから見積もった上限以下になるが、バイト数の最終確認は
+    切り出し後に ensure_fits で行う。無音中点のリストも返す（再分割用）。"""
     size = os.path.getsize(path)
     if size <= TARGET_CHUNK_BYTES:
-        return [(0.0, duration)]
+        return [(0.0, duration)], []
 
     bytes_per_sec = size / duration
     max_seg = TARGET_CHUNK_BYTES / bytes_per_sec
@@ -97,7 +124,31 @@ def plan_segments(path: str, duration: float) -> List[Tuple[float, float]]:
         segments.append((cursor, cut))
         cursor = cut
     segments.append((cursor, duration))
-    return segments
+    return segments, silences
+
+
+def split_near_middle(start: float, end: float, silences: List[float]) -> float:
+    """区間の中央付近（30〜70%）で最も中央に近い無音、無ければ中央。"""
+    mid = (start + end) / 2
+    span = end - start
+    cands = [t for t in silences if start + span * 0.3 <= t <= start + span * 0.7]
+    return min(cands, key=lambda t: abs(t - mid)) if cands else mid
+
+
+def ensure_fits(src: str, workdir: str, tag: str, start: float, end: float,
+                silences: List[float], depth: int = 0) -> List[str]:
+    """区間を切り出し、実サイズが API 上限を超えていれば無音位置で半分に割って再帰。
+    見積もり（平均ビットレート）が外れても送信前に必ず上限以下に収める。"""
+    dst = os.path.join(workdir, f"chunk_{tag}.mp3")
+    cut_segment(src, dst, start, end)
+    if os.path.getsize(dst) <= API_MAX_BYTES:
+        return [dst]
+    os.remove(dst)
+    if depth >= MAX_RESPLIT_DEPTH:
+        raise RuntimeError(f"区間 {start:.0f}-{end:.0f}s を上限以下に分割できませんでした")
+    cut = split_near_middle(start, end, silences)
+    return (ensure_fits(src, workdir, f"{tag}a", start, cut, silences, depth + 1)
+            + ensure_fits(src, workdir, f"{tag}b", cut, end, silences, depth + 1))
 
 
 def cut_segment(src: str, dst: str, start: float, end: float) -> None:
@@ -117,7 +168,7 @@ def build_prompt(user_hint: Optional[str], prev_tail: str) -> str:
     """Whisper は prompt が長いと先頭から捨てるので、重要なものほど後ろに置く。"""
     parts = [BASE_PROMPT]
     if user_hint:
-        parts.append(user_hint.strip())
+        parts.append(user_hint.strip()[:USER_HINT_MAX_CHARS])
     if prev_tail:
         parts.append(prev_tail)
     return " ".join(p for p in parts if p)
@@ -133,11 +184,12 @@ def transcribe_file(client: openai.OpenAI, path: str, prompt: str) -> str:
 
 
 @app.post("/transcribe")
-async def transcribe_audio(
+def transcribe_audio(
     file: UploadFile = File(...),
     prompt: Optional[str] = Form(None),
 ):
-    """音声/動画ファイルを文字起こしする。prompt は用語ヒント（任意）。"""
+    """音声/動画ファイルを文字起こしする。prompt は用語ヒント（任意）。
+    ffmpeg と OpenAI 呼び出しはブロッキングなので同期関数にしてスレッドプールに逃がす。"""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return JSONResponse(
@@ -155,17 +207,19 @@ async def transcribe_audio(
         audio = os.path.join(workdir, "audio.mp3")
         normalize_audio(src, audio)
         duration = probe_duration(audio)
-        segments = plan_segments(audio, duration)
+        segments, silences = plan_segments(audio, duration)
+
+        if len(segments) == 1:
+            chunks = [audio]
+        else:
+            chunks = []
+            for i, (start, end) in enumerate(segments):
+                chunks.extend(ensure_fits(audio, workdir, str(i), start, end, silences))
 
         client = openai.OpenAI(api_key=api_key)
         texts: List[str] = []
         prev_tail = ""
-        for i, (start, end) in enumerate(segments):
-            if len(segments) == 1:
-                target = audio
-            else:
-                target = os.path.join(workdir, f"chunk_{i}.mp3")
-                cut_segment(audio, target, start, end)
+        for target in chunks:
             text = transcribe_file(client, target, build_prompt(prompt, prev_tail))
             texts.append(text)
             prev_tail = text[-PREV_TAIL_CHARS:] if PREV_TAIL_CHARS > 0 else ""
@@ -174,7 +228,7 @@ async def transcribe_audio(
             "text": "\n".join(t for t in texts if t),
             "model": MODEL,
             "duration": round(duration, 1),
-            "segments": len(segments),
+            "segments": len(chunks),
         }
 
     except ValueError as e:
