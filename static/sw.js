@@ -1,10 +1,13 @@
-const CACHE_NAME = 'transcribe-v5';
+const CACHE_NAME = 'transcribe-v6';
 const ASSETS = [
   '/',
   '/index.html',
   '/style.css',
   '/app.js',
-  '/icon.svg'
+  '/icon.svg',
+  '/history.html',
+  '/history.css',
+  '/history.js'
 ];
 
 // Install
