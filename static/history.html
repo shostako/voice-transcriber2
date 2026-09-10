@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Usage History | 音声文字起こし</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="history.css">
+  <meta name="theme-color" content="#1a1612">
+</head>
+<body>
+  <div class="paper-texture"></div>
+  <main class="history-container">
+    <header class="history-header">
+      <div>
+        <p class="history-kicker">TRANSCRIPTION LEDGER</p>
+        <h1>利用履歴</h1>
+        <p>音声と本文は保存せず、利用量と費用だけを記録する。</p>
+      </div>
+      <div class="history-actions">
+        <a href="/" class="action-btn">文字起こしへ</a>
+        <a href="/api/history/export.csv" class="action-btn">CSV保存</a>
+      </div>
+    </header>
+
+    <section class="summary-grid" id="summary-grid" aria-label="利用集計">
+      <article><span>実行回数</span><strong id="requests">—</strong></article>
+      <article><span>成功 / 失敗</span><strong id="result-count">—</strong></article>
+      <article><span>音声時間</span><strong id="audio-time">—</strong></article>
+      <article><span>出力文字数</span><strong id="characters">—</strong></article>
+      <article><span>API費用</span><strong id="cost">—</strong></article>
+    </section>
+
+    <p class="history-status" id="history-status">履歴を読み込み中…</p>
+    <section class="table-wrap" aria-label="文字起こし履歴">
+      <table>
+        <thead>
+          <tr>
+            <th>日時</th><th>結果</th><th>音声</th><th>文字数</th>
+            <th>モデル</th><th>分割</th><th>整形</th><th>処理時間</th><th>費用</th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="history.js"></script>
+</body>
+</html>

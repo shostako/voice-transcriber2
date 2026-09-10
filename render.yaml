@@ -6,3 +6,9 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false  # Render Dashboardで手動設定
+      - key: SUPABASE_URL
+        value: https://cqsktjmkjkvdkoizolgh.supabase.co
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: HISTORY_PASSWORD
+        sync: false

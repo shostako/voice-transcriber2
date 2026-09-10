@@ -11,6 +11,7 @@
 3. チャンクごとに `gpt-transcribe`（既定）で書き起こし。直前チャンクの末尾を prompt に継ぎ足して文脈を繋ぐ
 4. 用語ヒント（UI のテキスト欄、200 文字まで）を `keywords` として渡し、専門用語・人名の誤変換を抑える
 5. `gpt-5.4-mini` で校正（要約禁止、長さ比 0.7〜1.5 を外れたら原文に戻す）。UI のチェックで無効化可、Raw/Polished は結果画面で切替
+6. Supabase に利用日時・音声時間・文字数・token 数・推定 API 料金を記録。音声と文字起こし本文は保存しない
 
 フロントは静的 PWA（`static/`）。UI を変えたら `static/sw.js` の `CACHE_NAME` を上げないと旧キャッシュが残る。
 
@@ -35,6 +36,11 @@ ffmpeg / ffprobe が PATH に必要（無ければ起動時に警告が出る）
 | `TRANSCRIBE_PREV_TAIL_CHARS` | `60` | 前チャンク末尾を継ぎ足す文字数 |
 | `FFMPEG_TIMEOUT_SEC` | `600` | ffmpeg 1 回あたりのタイムアウト |
 | `POLISH_MODEL` | `gpt-5.4-mini` | 校正に使う chat モデル |
+| `SUPABASE_URL` | なし | 利用履歴を保存する Supabase Project URL |
+| `SUPABASE_SECRET_KEY` | なし | サーバ専用の Supabase Secret key |
+| `HISTORY_PASSWORD` | なし | `/history` と履歴 API の Basic 認証パスワード |
+| `LOG_INCLUDE_FILENAME` | `false` | `true` の場合だけ元ファイル名を履歴へ保存 |
+| `TRANSCRIPTION_PRICE_PER_MINUTE` | モデル別 | 未登録の文字起こしモデルの単価上書き |
 
 空文字は未設定と同じ扱い（既定に倒れる）。
 
@@ -63,6 +69,18 @@ ffmpeg / ffprobe が PATH に必要（無ければ起動時に警告が出る）
 
 `polish=false`、書き起こしが空、全チャンクの校正が失敗した場合は `polished=false` で、`polish_partial` / `polish_model` は付かない。
 
+## 利用履歴
+
+`/history` で直近200件の利用量と費用を表示する。ブラウザの Basic 認証ではユーザー名は任意、パスワードに `HISTORY_PASSWORD` を入力する。
+
+- `GET /api/history?limit=100`: 履歴と合計
+- `GET /api/history/export.csv`: 最大500件のCSV
+- 音声と文字起こし本文は保存しない
+- ファイル名も既定では保存しない
+- Supabaseへの保存失敗は文字起こし本体を失敗させない
+
+SupabaseのSecret keyはRenderの環境変数だけに設定する。公開JavaScriptやGitHubへ書かないこと。2026年末に廃止予定の旧`service_role`キーではなく、`sb_secret_...`形式を使う。
+
 ## モデル比較
 
 ```bash
@@ -83,7 +101,7 @@ Render 側の GitHub App 連携（push 検知の自動デプロイ）は動い�
 curl -s https://voice-transcriber2.onrender.com/sw.js | grep CACHE_NAME
 ```
 
-`OPENAI_API_KEY` は Render Dashboard で設定する（`render.yaml` は `sync: false`）。
+`OPENAI_API_KEY`、`SUPABASE_SECRET_KEY`、`HISTORY_PASSWORD` は Render Dashboard で設定する（`render.yaml` は `sync: false`）。
 
 ## レビュー
 

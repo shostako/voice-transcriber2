@@ -1,15 +1,44 @@
+import base64
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import List, Optional, Tuple
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import openai
+
+from usage_history import (
+    fetch_logs,
+    insert_log,
+    logs_csv,
+    polish_cost,
+    safe_error_message,
+    summarize,
+    transcription_cost,
+)
+
+
+def require_history_auth(request: Request) -> None:
+    password = os.getenv("HISTORY_PASSWORD")
+    if not password:
+        raise HTTPException(status_code=503, detail="履歴画面のパスワードが未設定です")
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        raise HTTPException(status_code=401, detail="認証が必要です", headers={"WWW-Authenticate": "Basic"})
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        _, supplied = decoded.split(":", 1)
+    except (ValueError, UnicodeDecodeError):
+        supplied = ""
+    if not secrets.compare_digest(supplied, password):
+        raise HTTPException(status_code=401, detail="認証に失敗しました", headers={"WWW-Authenticate": "Basic"})
 
 load_dotenv()
 
@@ -248,8 +277,8 @@ def split_for_polish(text: str, limit: int = POLISH_CHUNK_CHARS) -> List[str]:
     return chunks
 
 
-def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str], idx: int) -> Tuple[str, bool]:
-    """1塊を校正して (本文, 整形できたか) を返す。API エラーも長さ比逸脱も原文に落とす。"""
+def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str], idx: int) -> Tuple[str, bool, int, int]:
+    """1塊を校正して (本文, 成功, 入力token, 出力token) を返す。"""
     user = (f"用語集: {user_hint.strip()}\n\n" if user_hint else "") + f"--- 書き起こし ---\n{text}"
     try:
         r = client.chat.completions.create(
@@ -258,20 +287,62 @@ def polish_chunk(client: openai.OpenAI, text: str, user_hint: Optional[str], idx
         )
     except Exception as e:
         print(f"[polish] chunk {idx}: {type(e).__name__}: {e} → 原文を採用", flush=True)
-        return text, False
+        return text, False, 0, 0
+    usage = getattr(r, "usage", None)
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
     out = (r.choices[0].message.content or "").strip()
     ratio = len(out) / max(len(text), 1)
     if not out or not (POLISH_RATIO_MIN <= ratio <= POLISH_RATIO_MAX):
         print(f"[polish] chunk {idx}: 長さ比 {ratio:.2f} が範囲外 → 原文を採用", flush=True)
-        return text, False
-    return out, True
+        return text, False, input_tokens, output_tokens
+    return out, True, input_tokens, output_tokens
 
 
-def polish_text(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> Tuple[str, int, int]:
-    """(本文, 整形できた塊数, 全塊数)。塊の連結は単一改行にして、機械的な境界を段落に見せない。"""
+def polish_text(client: openai.OpenAI, text: str, user_hint: Optional[str]) -> Tuple[str, int, int, int, int]:
+    """(本文, 成功塊数, 全塊数, 入力token, 出力token)。"""
     results = [polish_chunk(client, c, user_hint, i) for i, c in enumerate(split_for_polish(text))]
-    ok = sum(1 for _, done in results if done)
-    return "\n".join(t for t, _ in results), ok, len(results)
+    ok = sum(1 for _, done, _, _ in results if done)
+    return (
+        "\n".join(t for t, _, _, _ in results),
+        ok,
+        len(results),
+        sum(input_tokens for _, _, input_tokens, _ in results),
+        sum(output_tokens for _, _, _, output_tokens in results),
+    )
+
+
+def save_request_log(started: float, filename: str, status: str,
+                     duration: Optional[float], raw: str, output: str,
+                     segments: int, polish_requested: bool,
+                     polish_succeeded: bool = False, polish_partial: bool = False,
+                     polish_input_tokens: int = 0, polish_output_tokens: int = 0,
+                     error: Optional[BaseException] = None) -> None:
+    """本文を含まない利用統計を保存する。失敗しても本処理へ例外を戻さない。"""
+    include_filename = (os.getenv("LOG_INCLUDE_FILENAME") or "false").lower() == "true"
+    transcribe_usd = transcription_cost(MODEL, duration)
+    polish_usd = polish_cost(POLISH_MODEL, polish_input_tokens, polish_output_tokens)
+    payload = {
+        "status": status,
+        "original_filename": os.path.basename(filename)[:255] if include_filename and filename else None,
+        "audio_duration_seconds": round(duration, 3) if duration is not None else None,
+        "raw_characters": len(raw) if raw else 0,
+        "output_characters": len(output) if output else 0,
+        "transcription_model": MODEL,
+        "transcription_segments": segments,
+        "transcription_cost_usd": str(transcribe_usd),
+        "polish_requested": polish_requested,
+        "polish_succeeded": polish_succeeded,
+        "polish_partial": polish_partial,
+        "polish_model": POLISH_MODEL if polish_requested else None,
+        "polish_input_tokens": polish_input_tokens,
+        "polish_output_tokens": polish_output_tokens,
+        "polish_cost_usd": str(polish_usd),
+        "processing_seconds": round(time.perf_counter() - started, 3),
+        "error_type": type(error).__name__ if error else None,
+        "error_message": safe_error_message(error) if error else None,
+    }
+    insert_log(payload)
 
 
 @app.post("/transcribe")
@@ -282,8 +353,21 @@ def transcribe_audio(
 ):
     """音声/動画ファイルを文字起こしする。prompt は用語ヒント（任意）。
     ffmpeg と OpenAI 呼び出しはブロッキングなので同期関数にしてスレッドプールに逃がす。"""
+    started = time.perf_counter()
+    filename = file.filename or ""
+    duration: Optional[float] = None
+    chunks: List[str] = []
+    raw = ""
+    output = ""
+    polish_succeeded = False
+    polish_partial = False
+    polish_input_tokens = 0
+    polish_output_tokens = 0
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        error = RuntimeError("OpenAI APIキーが設定されていません")
+        save_request_log(started, filename, "error", duration, raw, output, 0, polish, error=error)
         return JSONResponse(
             status_code=500,
             content={"error": "OpenAI APIキーが設定されていません。.envファイルを確認してください。"},
@@ -317,6 +401,7 @@ def transcribe_audio(
             prev_tail = text[-PREV_TAIL_CHARS:] if PREV_TAIL_CHARS > 0 else ""
 
         raw = "\n".join(t for t in texts if t)
+        output = raw
         result = {
             "text": raw,
             "raw": raw,
@@ -326,24 +411,65 @@ def transcribe_audio(
             "segments": len(chunks),
         }
         if polish and raw.strip():
-            text, ok, total = polish_text(client, raw, prompt)
+            text, ok, total, polish_input_tokens, polish_output_tokens = polish_text(client, raw, prompt)
             if ok > 0:
                 result["text"] = text
                 result["polished"] = True
                 result["polish_partial"] = ok < total
                 result["polish_model"] = POLISH_MODEL
+                output = text
+                polish_succeeded = True
+                polish_partial = ok < total
             else:
                 print(f"[polish] 全 {total} 塊が原文に戻った", flush=True)
+        save_request_log(
+            started, filename, "success", duration, raw, output, len(chunks), polish,
+            polish_succeeded, polish_partial, polish_input_tokens, polish_output_tokens,
+        )
         return result
 
     except ValueError as e:
+        save_request_log(started, filename, "error", duration, raw, output, len(chunks), polish, error=e)
         return JSONResponse(status_code=400, content={"error": str(e)})
     except Exception as e:
         import traceback
         traceback.print_exc()
+        save_request_log(started, filename, "error", duration, raw, output, len(chunks), polish, error=e)
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+@app.get("/history", include_in_schema=False)
+def history_page(request: Request):
+    require_history_auth(request)
+    return FileResponse("static/history.html")
+
+
+@app.get("/api/history")
+def history_api(request: Request, limit: int = 100):
+    require_history_auth(request)
+    try:
+        rows = fetch_logs(limit)
+    except Exception as exc:
+        print(f"[history] 読み込み失敗: {safe_error_message(exc)}", flush=True)
+        raise HTTPException(status_code=502, detail="利用履歴を読み込めませんでした") from exc
+    return {"summary": summarize(rows), "items": rows}
+
+
+@app.get("/api/history/export.csv")
+def history_export(request: Request, limit: int = 500):
+    require_history_auth(request)
+    try:
+        csv_text = logs_csv(fetch_logs(limit))
+    except Exception as exc:
+        print(f"[history] CSV読み込み失敗: {safe_error_message(exc)}", flush=True)
+        raise HTTPException(status_code=502, detail="利用履歴を読み込めませんでした") from exc
+    return PlainTextResponse(
+        csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=transcription-history.csv"},
+    )
 
 
 # 静的ファイル配信（APIルートの後に配置）

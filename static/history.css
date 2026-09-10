@@ -1,0 +1,23 @@
+.history-container { width: min(1180px, calc(100% - 32px)); margin: 48px auto; position: relative; }
+.history-header { display: flex; justify-content: space-between; gap: 24px; align-items: end; border-bottom: 2px solid #2d261f; padding-bottom: 22px; }
+.history-header h1 { font-family: Georgia, 'Noto Serif JP', serif; font-size: clamp(2.3rem, 6vw, 4.5rem); margin: 0; }
+.history-header p { margin: 8px 0 0; }
+.history-kicker { font-family: monospace; letter-spacing: .16em; font-size: .78rem; }
+.history-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.history-actions a { text-decoration: none; display: inline-flex; align-items: center; }
+.summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin: 26px 0; }
+.summary-grid article { border: 1px solid #8f806e; background: rgba(249, 245, 236, .72); padding: 16px; }
+.summary-grid span { display: block; font-size: .78rem; opacity: .72; }
+.summary-grid strong { display: block; margin-top: 8px; font-family: monospace; font-size: 1.35rem; }
+.history-status { min-height: 1.5em; }
+.table-wrap { overflow-x: auto; border: 1px solid #8f806e; background: rgba(249, 245, 236, .78); }
+table { width: 100%; border-collapse: collapse; min-width: 940px; }
+th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid #c8bba8; white-space: nowrap; font-size: .85rem; }
+th { position: sticky; top: 0; background: #2d261f; color: #f7f0e5; font-family: monospace; letter-spacing: .04em; }
+.error-row { background: rgba(145, 45, 35, .08); }
+@media (max-width: 760px) {
+  .history-container { margin-top: 24px; }
+  .history-header { display: block; }
+  .history-actions { margin-top: 18px; }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
