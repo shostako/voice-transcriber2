@@ -49,7 +49,7 @@
         <p class="upload-hint">または</p>
         <label for="file-input" class="upload-btn">ファイルを選択</label>
         <input type="file" id="file-input" accept="audio/*,video/*" hidden>
-        <p class="file-name" id="file-name"></p>
+        <p class="file-name" id="file-name" aria-live="polite"></p>
       </div>
     </section>
 
@@ -63,6 +63,12 @@
           <input type="checkbox" id="polish-input" checked>
           <span>AI整形（誤変換の修正・句読点・段落分け）</span>
         </label>
+        <div class="start-actions">
+          <button type="button" class="start-btn" id="start-btn" disabled>
+            文字起こし開始
+          </button>
+          <p class="start-note">ファイルを選び、用語ヒントとAI整形を確認してから開始する。</p>
+        </div>
       </div>
     </section>
 

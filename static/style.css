@@ -347,6 +347,60 @@ body {
   height: 1rem;
 }
 
+.start-actions {
+  margin-top: var(--space-lg);
+  text-align: center;
+}
+
+.start-btn {
+  width: 100%;
+  padding: 0.9rem var(--space-lg);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--paper);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+.start-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+  border-color: var(--accent-light);
+}
+
+.start-btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.start-btn:disabled {
+  background: var(--paper-dark);
+  border-color: var(--ink-faded);
+  color: var(--ink-faded);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.start-note {
+  margin-top: var(--space-sm);
+  color: var(--ink-faded);
+  font-size: 0.75rem;
+}
+
+.upload-zone.processing {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.hint-input:disabled,
+.polish-toggle input:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 /* Result Section */
 .result-section {
   animation: slideUp 0.6s ease-out;

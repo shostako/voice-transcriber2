@@ -10,8 +10,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const hintInput = document.getElementById('hint-input');
   const polishInput = document.getElementById('polish-input');
   const rawBtn = document.getElementById('raw-btn');
+  const startBtn = document.getElementById('start-btn');
   let lastResult = null;   // {text, raw, polished}
   let showingRaw = false;
+  let selectedFile = null;
+  let isProcessing = false;
 
   try {
     const savedPolish = localStorage.getItem('transcribe-polish');
@@ -47,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Drag & Drop
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
+    if (isProcessing) return;
     dropZone.classList.add('dragover');
   });
 
@@ -57,14 +61,16 @@ document.addEventListener('DOMContentLoaded', () => {
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
+    if (isProcessing) return;
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      handleFile(files[0]);
+      selectFile(files[0]);
     }
   });
 
-  // Click to upload (avoid double-trigger from label)
+  // Click to select (avoid double-trigger from label)
   dropZone.addEventListener('click', (e) => {
+    if (isProcessing) return;
     // labelやinput自体からのクリックは無視（labelがinputを開くので）
     if (e.target.tagName === 'LABEL' || e.target.tagName === 'INPUT') {
       return;
@@ -74,9 +80,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      handleFile(e.target.files[0]);
+      selectFile(e.target.files[0]);
     }
   });
+
+  startBtn.addEventListener('click', startTranscription);
 
   // Copy button
   copyBtn.addEventListener('click', async () => {
@@ -108,14 +116,45 @@ document.addEventListener('DOMContentLoaded', () => {
     URL.revokeObjectURL(url);
   });
 
-  async function handleFile(file) {
+  function formatFileSize(bytes) {
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function setProcessing(processing) {
+    isProcessing = processing;
+    fileInput.disabled = processing;
+    hintInput.disabled = processing;
+    polishInput.disabled = processing;
+    startBtn.disabled = processing || !selectedFile;
+    startBtn.textContent = processing ? '文字起こし中…' : '文字起こし開始';
+    dropZone.classList.toggle('processing', processing);
+    dropZone.setAttribute('aria-disabled', processing ? 'true' : 'false');
+  }
+
+  function selectFile(file) {
     // Validate file type
     if (!(file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+      selectedFile = null;
+      startBtn.disabled = true;
+      fileName.textContent = '';
       alert('音声または動画ファイルを選択してください。');
+      fileInput.value = '';
       return;
     }
 
-    fileName.textContent = `選択: ${file.name}`;
+    // ドロップとファイル選択を行き来しても、同じファイルを再選択できるようにする
+    fileInput.value = '';
+    selectedFile = file;
+    fileName.textContent = `選択済み: ${file.name}（${formatFileSize(file.size)}）`;
+    startBtn.disabled = false;
+  }
+
+  async function startTranscription() {
+    if (!selectedFile || isProcessing) return;
+
+    const file = selectedFile;
+    setProcessing(true);
     loadingOverlay.classList.remove('hidden');
     resultSection.classList.add('hidden');
 
@@ -138,6 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
         showingRaw = false;
         renderResult();
         resultSection.classList.remove('hidden');
+        selectedFile = null;
+        fileInput.value = '';
+        fileName.textContent = `完了: ${file.name}`;
         // Scroll to result
         resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } else {
@@ -149,6 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
       alert(`通信エラーが発生しました。\n${error.message}`);
     } finally {
       loadingOverlay.classList.add('hidden');
+      setProcessing(false);
     }
   }
 });
