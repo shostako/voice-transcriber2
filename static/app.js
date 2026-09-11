@@ -143,6 +143,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    // ドロップとファイル選択を行き来しても、同じファイルを再選択できるようにする
+    fileInput.value = '';
     selectedFile = file;
     fileName.textContent = `選択済み: ${file.name}（${formatFileSize(file.size)}）`;
     startBtn.disabled = false;
